@@ -44,7 +44,7 @@ static EVENT_HANDLER(physical_ready)
 ///
 static void up_from_dll(int link, const char *data, size_t length)
 {
-  if (length >= sizeof(struct nl_packet)) {
+  if (length > sizeof(struct nl_packet)) {
     printf("Mobile: %zu is larger than a nl_packet! ignoring.\n", length);
     return;
   }
