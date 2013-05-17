@@ -52,6 +52,9 @@ struct dll_eth_state {
   //number of col this state sensed in a row
   int num_col;
   
+  //indicator that we are able to send out frame
+  bool ready;
+  
   // A pointer to the function that is called to pass data up to the next layer.????????????
   up_from_dll_fn_ty nl_callback;
   
@@ -85,6 +88,7 @@ void dll_eth_backoff(dll_eth_state *state)
 	srand(time(NULL));
 	CnetTime backoff_time;
 	CnetTimerID timer;
+	state->ready = false;
 	if(state->num_backoff < MAX_BACKOFF) {
 		state->num_backoff++;
 		if(num_col < MAX_COL) {
@@ -107,42 +111,43 @@ void dll_eth_write(struct dll_eth_state *state,
 {
   if (!data || length == 0)
     return;
-  
-  struct eth_frame frame;
-    
-  // Set the destination and source address.
-  memcpy(frame.dest, dest, sizeof(CnetNICaddr));
-  memcpy(frame.src, linkinfo[state->link].nicaddr, sizeof(CnetNICaddr));
-  
-  // Set the length of the payload.
-  memcpy(frame.type, &length, sizeof(length));
-  
-  // Copy the payload into the frame.
-  memcpy(frame.data, data, length);
-    
-  // Calculate the number of bytes to send.
-  size_t frame_length = length + ETH_HEADER_LENGTH;
-  if (frame_length < ETH_MINFRAME)
-    frame_length = ETH_MINFRAME;
+ 	if(state->ready) { 
+		struct eth_frame frame;
+		
+		// Set the destination and source address.
+		memcpy(frame.dest, dest, sizeof(CnetNICaddr));
+		memcpy(frame.src, linkinfo[state->link].nicaddr, sizeof(CnetNICaddr));
+	
+		// Set the length of the payload.
+		memcpy(frame.type, &length, sizeof(length));
+	
+		// Copy the payload into the frame.
+		memcpy(frame.data, data, length);
+		
+		// Calculate the number of bytes to send.
+		size_t frame_length = length + ETH_HEADER_LENGTH;
+		if (frame_length < ETH_MINFRAME)
+			frame_length = ETH_MINFRAME;
 
-	//checksum
-  frame.checksum = 0;
-  frame.checksum  = CNET_crc32((unsigned char *)&frame, (int)frame_length);
+		//checksum
+		frame.checksum = 0;
+		frame.checksum  = CNET_crc32((unsigned char *)&frame, (int)frame_length);
 	
-	//keep a copy of sent frame
-  memcpy(state->sent_frame,frame,sizeof(eth_frame));
+		//keep a copy of sent frame
+		memcpy(state->sent_frame,frame,sizeof(eth_frame));
 	
-	int busy = CNET_carrier_sense(state->link);
-	if(busy == -1) {
-		//failure
-	} else if(busy == 0) {
-	/*	//reset the back off variables in nl
-		state->num_backoff = 0;
-		state->num_col = 0;*/
-  	CHECK(CNET_write_physical(state->link, &frame, &frame_length));
-  } else {
-  //there's transmission in ethernet, backoff
-  	dll_eth_backoff(state);
+		int busy = CNET_carrier_sense(state->link);
+		if(busy == -1) {
+			//failure
+		} else if(busy == 0) {
+		/*	//reset the back off variables in nl
+			state->num_backoff = 0;
+			state->num_col = 0;*/
+			CHECK(CNET_write_physical(state->link, &frame, &frame_length));
+		} else {
+		//there's transmission in ethernet, backoff
+			dll_eth_backoff(state);
+		}
   }
 }
 
@@ -151,6 +156,7 @@ void dll_eth_timeouts(CnetEvent ev, CnetTimerID timer, CnetData data)
   struct dll_eth_state *state = (struct dll_eth_state *)data;
 	struct eth_frame frame;
 	frame = state->sent_frame;
+	state->ready = true;
 	dll_eth_write(state, frame.dest, frame.data, (uint16_t)frame.type);
 }
 
@@ -219,7 +225,7 @@ struct dll_eth_state *dll_eth_new_state(int link, up_from_dll_fn_ty callback)
   state->sent_frame = NULL;
   state->num_col = 0;
   state->num_backoff = 0;
-
+	state->ready = true;
   CHECK(CNET_set_handler(EV_TIMER1, dll_eth_timeouts, 0));
 
   return state;
