@@ -20,7 +20,7 @@ const int MAX_COL = 10;
 //once we back off for 16 times and still unable to send. the network is considered too congested
 const int MAX_BACKOFF = 16;
 //TODO maybe edit the back off time
-static CnetTime backoff_period = 5120000;//51.2microseconds
+static CnetTime backoff_period = 52;//51.2microseconds
 
 /// This struct specifies the format of an Ethernet frame. When using Ethernet
 /// links in cnet, the first part of the frame must be the destination address.
@@ -36,7 +36,7 @@ struct eth_frame {
   char type[2];
     
   //checksum of the frame
-  int checksum;
+ // int checksum;
   
   // Data must be the last field, because we will truncate the unused area when
   // sending to the physical layer.
@@ -88,21 +88,37 @@ void dll_eth_delete_state(struct dll_eth_state *state)
 
 void dll_eth_backoff(struct dll_eth_state *state) 
 {
+	printf("dll_eth_backoff \n");
 	srand(time(NULL));
 	CnetTime backoff_time;
 	state->ready = false;
+	printf("Outside num_col %d, num_backoff %d\n", state->num_col, state->num_backoff);
 	if(state->num_backoff < MAX_BACKOFF) {
 		state->num_backoff++;
 		if(state->num_col < MAX_COL) {
-			backoff_time = (rand()%(int)(pow(2,state->num_col)))*backoff_period;
+			backoff_time = (rand()%(int)(pow(2,state->num_col)) +1 )*backoff_period;
+			printf("backoff_time %d\n", backoff_time*10000);
+			if(backoff_time == 0) {
+				state->ready = true;
+			}
 		} else {
 			backoff_time = pow(2,state->num_col)*backoff_period;
+			
 		}
-		state->timer = CNET_start_timer(EV_TIMER1, backoff_time, (CnetData)&state);
+		state->timer = CNET_start_timer(EV_TIMER1, backoff_time, (CnetData)state);
 	} else {
 		//ether is deemed to be too busy
 	}
 }
+
+void dll_reset(CnetEvent ev, CnetTimerID timer, CnetData data) 
+{
+	struct dll_eth_state *state = (struct dll_eth_state *)data;
+	state->num_col = 0;
+	state->num_backoff = 0;
+	state->ready = true;
+}
+
 
 /// Write a frame to the given Ethernet link.
 /// transmit frame function
@@ -132,9 +148,9 @@ void dll_eth_write(struct dll_eth_state *state,
 			frame_length = ETH_MINFRAME;
 
 		//checksum
-		frame.checksum = 0;
-		frame.checksum  = CNET_crc32((unsigned char *)&frame, (int)frame_length);
-	
+	//	frame.checksum = 0;
+	//	frame.checksum  = CNET_crc32((unsigned char *)&frame, (int)frame_length);
+//		printf("write checksum %d length %d\n", frame.checksum, frame_length);
 		//keep a copy of sent frame
 //		state->sent_frame;
 		memcpy(&(state->sent_frame),&frame,sizeof(struct eth_frame));
@@ -142,28 +158,38 @@ void dll_eth_write(struct dll_eth_state *state,
 		int busy = CNET_carrier_sense(state->link);
 		if(busy == -1) {
 			//failure
+			printf("failed\n");
 		} else if(busy == 0) {
 		/*	//reset the back off variables in nl
 			state->num_backoff = 0;
 			state->num_col = 0;*/
-			CHECK(CNET_write_physical(state->link, &frame, &frame_length));
-			
-			//TODO prolly like what matt say and add a timeout? or we have network layer to help us keep track of data
+			printf("not busy\n");
+			CHECK(CNET_write_physical(state->link, &frame, &frame_length));	
+  		
+  		
+  		CHECK(CNET_set_handler(EV_TIMER2, dll_reset, 0));
+			CnetTimerID reset_timer;
+			reset_timer = CNET_start_timer(EV_TIMER2, backoff_period, (CnetData)state);
 			
 		} else {
 		//there's transmission in ethernet, backoff
+			printf("Busy\n");
 			dll_eth_backoff(state);
 		}
+  } else {
+  	printf("not ready \n");
   }
 }
 
+//TODO error here!
 void dll_eth_timeouts(CnetEvent ev, CnetTimerID timer, CnetData data)
 {
+	printf("dll_eth_timeouts\n");
   struct dll_eth_state *state = (struct dll_eth_state *)data;
 	struct eth_frame frame;
-	frame = state->sent_frame;
+	memcpy(&frame, &(state->sent_frame), sizeof(struct eth_frame));
 	state->ready = true;
-	uint16_t length;
+	size_t length;
 	memcpy(&length, frame.type, sizeof(frame.type));	
 	dll_eth_write(state, frame.dest, frame.data, length);
 }
@@ -187,20 +213,23 @@ void dll_eth_read(struct dll_eth_state *state,
   // Treat the data as an Ethernet frame.
   struct eth_frame *frame = (struct eth_frame *)data;
   
-  int old_sum = frame->checksum;
-  frame->checksum = 0;
-  int new_sum = CNET_crc32((unsigned char *)&frame, (int)length);
-  
+//  int old_sum = frame->checksum;
+//  frame->checksum = 0;
+ // int new_sum = CNET_crc32((unsigned char *)&frame, (int)length);
+ // printf("old %d new %d \n", old_sum, new_sum);
   	//not corrupted
-  if(new_sum == old_sum) {
+ // if(new_sum == old_sum) {
+  //	printf("not corrupted \n");
   		// Extract the length of the payload from the Ethernet frame.
+	//		state->num_backoff = 0;
+	//		state->num_col = 0;
 			uint16_t payload_length = 0;
 			memcpy(&payload_length, frame->type, sizeof(payload_length));
-  
+  	
   		// Send the frame up to the next layer.
   		if (state->nl_callback)
     		(*(state->nl_callback))(state->link, frame->data, payload_length);	
-  } 
+ // } 
 }
 
 void dll_eth_collide(struct dll_eth_state *state) 

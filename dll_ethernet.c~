@@ -20,7 +20,7 @@ const int MAX_COL = 10;
 //once we back off for 16 times and still unable to send. the network is considered too congested
 const int MAX_BACKOFF = 16;
 //TODO maybe edit the back off time
-static CnetTime backoff_period = 512000;//51.2microseconds
+static CnetTime backoff_period = 5120000;//51.2microseconds
 
 /// This struct specifies the format of an Ethernet frame. When using Ethernet
 /// links in cnet, the first part of the frame must be the destination address.
@@ -163,7 +163,9 @@ void dll_eth_timeouts(CnetEvent ev, CnetTimerID timer, CnetData data)
 	struct eth_frame frame;
 	frame = state->sent_frame;
 	state->ready = true;
-	dll_eth_write(state, frame.dest, frame.data, (uint16_t)frame.type);
+	uint16_t length;
+	memcpy(&length, frame.type, sizeof(frame.type));	
+	dll_eth_write(state, frame.dest, frame.data, length);
 }
 
 /// Called when a frame has been received on the Ethernet link. This function
