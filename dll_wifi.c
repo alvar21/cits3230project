@@ -15,17 +15,17 @@
 #define CTS_TIMER EV_TIMER4
 #define TIME_PER_BYTE 10
 
-enum wifi_packet_type {
+typedef enum {
 	WIFI_PROBE,
 	WIFI_RTS,
 	WIFI_CTS,
 	WIFI_DATA
+} wifi_frame_type;
 
-}
 /// This struct specifies the format of the control section of a WiFi frame.
 struct wifi_control {
-  unsigned from_ds : 1;
-  enum wifi_frame_type type: 2;
+  unsigned from_ds;
+  wifi_frame_type type;
 };
 
 /// This struct specifies the format of a WiFi frame.
@@ -53,13 +53,14 @@ struct wifi_frame {
 
 #define WIFI_HEADER_LENGTH (offsetof(struct wifi_frame, data))
 
-typedef enum dll_wifi_state_status {
+typedef enum  {
 	WIFI_PROBING,
 	WIFI_READY,
 	WIFI_REQUESTING,
 	WIFI_SENDING,
-	WIFI_RECIEVING
-}
+	WIFI_RECEIVING
+} dll_wifi_state_status;
+
 /// This struct type will hold the state for one instance of the WiFi data
 /// link layer. The definition of the type is not important for clients.
 ///
@@ -82,48 +83,9 @@ struct dll_wifi_state {
   bool medium_ready;
 
 
-  wifi_frame frame;
-  wifi_frame control;
+  struct wifi_frame frame;
+  struct wifi_frame control;
 };
-
-static EVENT_HANDLER(clear_to_send) {
-	dll_wifi_state *state = (dll_wifi_state *)data;
-	state->medium_ready = true;
-	dll_wifi_send(state);
-}
-
-
-/// Create a new state for an instance of the WiFi data link layer.
-///
-struct dll_wifi_state *dll_wifi_new_state(int link,
-                                          up_from_dll_fn_ty callback,
-                                          bool is_ds)
-{
-  // Ensure that the given link exists and is a WLAN link.
-  if (link > nodeinfo.nlinks || linkinfo[link].linktype != LT_WLAN)
-    return NULL;
-  
-  // Allocate memory for the state.
-  struct dll_wifi_state *state = calloc(1, sizeof(struct dll_wifi_state));
-  
-  // Check whether or not the allocation was successful.
-  if (state == NULL)
-    return NULL;
-  
-  // Initialize the members of the structure.
-  state->link = link;
-  state->nl_callback = callback;
-  state->is_ds = is_ds;
-  
-  state->status = WIFI_PROBING;
-  if(is_ds)
-	  state->status = WIFI_READY;
-  state->medium_ready = true;
-
-  CNET_set_handler(CTS_TIMER, clear_to_send);
-
-  return state;
-}
 
 /// Delete the given dll_wifi_state. The given state pointer will be invalid
 /// following a call to this function.
@@ -146,58 +108,24 @@ void dll_wifi_send(struct dll_wifi_state *state) {
 		return;
 		//will be called again when medium is ready
 	}
-	switch(state-status) {
+	
+  size_t frame_length = WIFI_HEADER_LENGTH + state->frame.length;
+  
+	switch(state->status) {
 	case WIFI_SENDING:
 		CHECK(CNET_write_physical(state->link, &(state->frame), &frame_length));
 		break;
 	case WIFI_REQUESTING:
+	  frame_length = WIFI_HEADER_LENGTH;
 		CHECK(CNET_write_physical(state->link, &(state->control), &frame_length));
 		break;
-	case WIFI_RECIEVING:
+	case WIFI_RECEIVING:
+	  frame_length = WIFI_HEADER_LENGTH;
 		CHECK(CNET_write_physical(state->link, &(state->control), &frame_length));
-
+		break;
+	default: break;
 	}
 
-}
-/// Write a frame to the given WiFi link.
-///
-void dll_wifi_write(struct dll_wifi_state *state,
-                    CnetNICaddr dest,
-                    const char *data,
-                    uint16_t length)
-{
-  if (!data || length == 0 || length > WIFI_MAXDATA || !state->status == WIFI_READY)
-    return;
-  // Create a frame and initialize the length field.
-  state->frame = (struct wifi_frame){
-    .control = (struct wifi_control){
-      .from_ds = (state->is_ds ? 1 : 0),
-	  .wifi_packet_type = WIFI_DATA
-    },
-    .length = length
-  };
-  
-  
-  // Set the destination and source address.
-  if(state->is_ds)  	 
-	memcpy(state->ap, dest, sizeof(CnetNICaddr)); 
-
-  memcpy(frame.dest, state->ap, sizeof(CnetNICaddr));
-  memcpy(frame.src, linkinfo[state->link].nicaddr, sizeof(CnetNICaddr));
-  
-  // Copy in the payload.
-  memcpy(frame.data, data, length);
-  
-  
-  // Calculate the number of bytes to send.
-  size_t frame_length = WIFI_HEADER_LENGTH + length;
-
-  // Set the checksum.
-  state->frame.checksum = CNET_crc32((unsigned char *)&(state->frame), frame_length);
-
-  //send a RTS packet to associated access point
-  dll_wifi_control(state, state->ap, WIFI_RTS)
-  
 }
 
 //send control frames over the given WiFi link
@@ -210,13 +138,13 @@ void dll_wifi_control(struct dll_wifi_state *state,
 	if(type == WIFI_RTS)
 		state->status = WIFI_REQUESTING;
 	else if(type == WIFI_CTS)
-		state->status = WIFI_RECIEVING;
+		state->status = WIFI_RECEIVING;
 
   // Create a frame and initialize the length field.
   state->control = (struct wifi_frame){
     .control = (struct wifi_control){
       .from_ds = (state->is_ds ? 1 : 0),
-	  .wifi_packet_type = type
+	  .type = type
     },
     .length = state->frame.length,
 	.data = 0
@@ -235,6 +163,47 @@ void dll_wifi_control(struct dll_wifi_state *state,
  dll_wifi_send(state);
 
 }
+/// Write a frame to the given WiFi link.
+///
+void dll_wifi_write(struct dll_wifi_state *state,
+                    CnetNICaddr dest,
+                    const char *data,
+                    uint16_t length)
+{
+  if (!data || length == 0 || length > WIFI_MAXDATA || !state->status == WIFI_READY)
+    return;
+  // Create a frame and initialize the length field.
+  state->frame = (struct wifi_frame){
+    .control = (struct wifi_control){
+      .from_ds = (state->is_ds ? 1 : 0),
+	   .type = WIFI_DATA
+    },
+    .length = length
+  };
+  
+  
+  // Set the destination and source address.
+  if(state->is_ds)  	 
+	memcpy(state->dest, dest, sizeof(CnetNICaddr)); 
+
+  memcpy(state->frame.dest, state->dest, sizeof(CnetNICaddr));
+  memcpy(state->frame.src, linkinfo[state->link].nicaddr, sizeof(CnetNICaddr));
+  // Copy in the payload.
+  memcpy(state->frame.data, data, length);
+  
+  
+  // Calculate the number of bytes to send.
+  size_t frame_length = WIFI_HEADER_LENGTH + length;
+
+  // Set the checksum.
+  state->frame.checksum = CNET_crc32((unsigned char *)&(state->frame), frame_length);
+
+  //send a RTS packet to associated access point
+  dll_wifi_control(state, state->dest, WIFI_RTS)
+  
+}
+
+
 
 
 /// Called when a frame has been received on the WiFi link. This function will
@@ -319,3 +288,44 @@ void dll_wifi_read(struct dll_wifi_state *state,
 	}
   
 }
+
+static EVENT_HANDLER(clear_to_send) {
+	struct dll_wifi_state *state = (struct dll_wifi_state *)data;
+	state->medium_ready = true;
+	dll_wifi_send(state);
+}
+
+
+/// Create a new state for an instance of the WiFi data link layer.
+///
+struct dll_wifi_state *dll_wifi_new_state(int link,
+                                          up_from_dll_fn_ty callback,
+                                          bool is_ds)
+{
+  // Ensure that the given link exists and is a WLAN link.
+  if (link > nodeinfo.nlinks || linkinfo[link].linktype != LT_WLAN)
+    return NULL;
+  
+  // Allocate memory for the state.
+  struct dll_wifi_state *state = calloc(1, sizeof(struct dll_wifi_state));
+  
+  // Check whether or not the allocation was successful.
+  if (state == NULL)
+    return NULL;
+  
+  // Initialize the members of the structure.
+  state->link = link;
+  state->nl_callback = callback;
+  state->is_ds = is_ds;
+  
+  state->status = WIFI_PROBING;
+  if(is_ds)
+	  state->status = WIFI_READY;
+  state->medium_ready = true;
+
+  CNET_set_handler(CTS_TIMER, clear_to_send);
+
+  return state;
+}
+
+
