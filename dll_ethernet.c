@@ -92,11 +92,12 @@ void dll_eth_backoff(struct dll_eth_state *state)
 	srand(time(NULL));
 	CnetTime backoff_time;
 	state->ready = false;
-	printf("Outside num_col %d, num_backoff %d\n", state->num_col, state->num_backoff);
+//	printf("Outside num_col %d, num_backoff %d\n", state->num_col, state->num_backoff);
 	if(state->num_backoff < MAX_BACKOFF) {
 		state->num_backoff++;
 		if(state->num_col < MAX_COL) {
-			backoff_time = (rand()%(int)(pow(2,state->num_col)) +1 )*backoff_period;
+			int bt = (pow(2,state->num_col))*10;
+			backoff_time = (rand()% bt)*backoff_period;
 			printf("backoff_time %d\n", backoff_time*10000);
 			if(backoff_time == 0) {
 				state->ready = true;
